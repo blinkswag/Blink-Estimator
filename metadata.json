@@ -1,0 +1,5 @@
+{
+  "name": "Blink Estimator",
+  "description": "Pricing estimator agent for commercial signage using internal historical data.",
+  "requestFramePermissions": []
+}

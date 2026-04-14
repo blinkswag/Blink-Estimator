@@ -1,0 +1,75 @@
+[
+  {
+    "id": "REC-001",
+    "sign_type": "Channel Letters",
+    "dimensions": { "height": 18, "width": 120 },
+    "mounting": "Raceway",
+    "illumination": "Front-Lit LED",
+    "materials": "Aluminum",
+    "depth": 5,
+    "manufacture_cost": 2450.00,
+    "install_cost": 850.00,
+    "features": ["Standard Font", "White Acrylic Faces"],
+    "letter_count": 12
+  },
+  {
+    "id": "REC-002",
+    "sign_type": "Channel Letters",
+    "dimensions": { "height": 24, "width": 180 },
+    "mounting": "Direct",
+    "illumination": "Halo-Lit LED",
+    "materials": "Stainless Steel",
+    "depth": 3,
+    "manufacture_cost": 4200.00,
+    "install_cost": 1200.00,
+    "features": ["Custom Logo", "Brushed Finish"],
+    "letter_count": 8
+  },
+  {
+    "id": "REC-003",
+    "sign_type": "ADA Sign",
+    "dimensions": { "height": 8, "width": 8 },
+    "mounting": "Tape",
+    "illumination": "None",
+    "materials": "Acrylic",
+    "manufacture_cost": 45.00,
+    "install_cost": 15.00,
+    "features": ["Braille", "Tactile Text"],
+    "quantity": 20
+  },
+  {
+    "id": "REC-004",
+    "sign_type": "Cabinet Sign",
+    "dimensions": { "height": 48, "width": 96 },
+    "mounting": "Wall",
+    "illumination": "Internal LED",
+    "materials": "Aluminum/Polycarbonate",
+    "manufacture_cost": 1850.00,
+    "install_cost": 650.00,
+    "features": ["Single Sided", "Vinyl Graphics"]
+  },
+  {
+    "id": "REC-005",
+    "sign_type": "Monument Sign",
+    "dimensions": { "height": 72, "width": 120 },
+    "mounting": "Ground",
+    "illumination": "External Spotlights",
+    "materials": "Masonry/Aluminum",
+    "manufacture_cost": 8500.00,
+    "install_cost": 3500.00,
+    "features": ["Double Sided", "Stone Base"]
+  },
+  {
+    "id": "REC-006",
+    "sign_type": "Channel Letters",
+    "dimensions": { "height": 12, "width": 60 },
+    "mounting": "Raceway",
+    "illumination": "Front-Lit LED",
+    "materials": "Aluminum",
+    "depth": 5,
+    "manufacture_cost": 1200.00,
+    "install_cost": 450.00,
+    "features": ["Standard Font"],
+    "letter_count": 6
+  }
+]
