@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18  
+    commands:
+      - echo Installing source NPM dependencies...
+      - npm install --package-lock-only
+      - npm ci  
+
+  pre_build:
+    commands:
+      - echo Pre-build phase complete.
+
+  build:
+    commands:
+      - echo Building the React app...
+      - npm run build
+
+  post_build:
+    commands:
+      - echo Post-build phase complete.
+
+artifacts:
+  files:
+    - "**/*"
+  base-directory: "dist"
