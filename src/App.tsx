@@ -50,12 +50,12 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [scope, setScope] = useState<SignScope>({
-    sign_type: 'Channel Letters',
-    dimensions: { height: 18, width: 120, depth: 5 },
-    mounting: 'Raceway',
-    illumination: 'Front-Lit LED',
-    materials: 'Aluminum',
-    letter_count: 10
+    sign_type: 'Other',
+    dimensions: { height: 12, width: 12, depth: 1 },
+    mounting: 'Flush',
+    illumination: 'None',
+    materials: 'Acrylic',
+    letter_count: 0
   });
 
   const [artwork, setArtwork] = useState<ArtworkContext>({
@@ -95,6 +95,8 @@ export default function App() {
       let currentScope = { ...scope };
       let currentArtwork = { ...artwork };
 
+      let combinedNotes = specText;
+
       // If there's an uploaded file, extract details first
       if (uploadedFile) {
         try {
@@ -110,13 +112,16 @@ export default function App() {
             };
             setScope(currentScope);
           }
+          if (details.notes) {
+            combinedNotes = `${specText}\n\n[Extracted from file]: ${details.notes}`.trim();
+          }
         } catch (extractErr) {
           console.error('Extraction failed, proceeding with manual inputs', extractErr);
           // We continue even if extraction fails, using manual inputs
         }
       }
 
-      const data = await estimatePricing(currentScope, currentArtwork, specText, projectType, hasProgramPricing);
+      const data = await estimatePricing(currentScope, currentArtwork, combinedNotes, projectType, hasProgramPricing);
       setResult(data);
     } catch (err) {
       setError('Failed to generate estimate. Please check your inputs and try again.');

@@ -1,4 +1,4 @@
-export type SignType = 'ChannelLetters' | 'ADASign' | 'LexanPanel' | 'ACMPanel' | 'BladeSign' | 'CabinetSign' | 'PylonSign' | 'MonumentSign' | 'Other';
+export type SignType = 'ChannelLetters' | 'ADASign' | 'LexanPanel' | 'ACMPanel' | 'AcrylicPanel' | 'BladeSign' | 'CabinetSign' | 'PylonSign' | 'MonumentSign' | 'Other';
 
 export interface SignScope {
   sign_type: SignType | string;
