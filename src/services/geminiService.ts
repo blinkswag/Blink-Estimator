@@ -704,29 +704,43 @@ export async function estimatePricing(
         result.summary += " (Note: Matched records populated from historical database search)";
       }
 
-      // Determine pricing source from matched records
+      // Determine pricing source from matched records, prioritizing the records closest to the Mid Estimate cost
       const matchedRecords = Array.isArray(result.matched_records) ? result.matched_records : [];
-      const matchedIds = matchedRecords.map(r => r.record_id);
-      const matchedFullRecords = currentPricingDatabase.filter(r => matchedIds.includes(r.id));
+      const midEstimateValue = result.estimate?.manufacture_cost?.mid || 0;
       
-      // Add vendor_location to matched_records
-      if (Array.isArray(result.matched_records)) {
-        result.matched_records = result.matched_records.map(r => {
-          const full = currentPricingDatabase.find(f => f.id === r.record_id);
-          return {
-            ...r,
-            vendor_location: full?.vendor_location
-          };
-        });
+      // Add vendor_location to matched_records and find full records
+      const updatedMatchedRecords = matchedRecords.map(r => {
+        const full = currentPricingDatabase.find(f => f.id === r.record_id);
+        return {
+          ...r,
+          vendor_location: full?.vendor_location || r.vendor_location
+        };
+      });
+      result.matched_records = updatedMatchedRecords;
+
+      const matchedIds = updatedMatchedRecords.map(r => r.record_id);
+      const matchedFullRecords = currentPricingDatabase.filter(r => matchedIds.includes(r.id));
+
+      // Find the record closest to our Mid estimate to determine the primary source
+      let closestRecord = null;
+      let minDiff = Infinity;
+      
+      for (const r of matchedFullRecords) {
+        const diff = Math.abs(r.manufacture_cost - midEstimateValue);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestRecord = r;
+        }
       }
 
-      const locations = matchedFullRecords.map(r => (r.vendor_location || 'USA').toUpperCase());
-      const hasOverseas = locations.some(l => l.includes('CHINA') || l.includes('OVERSEAS') || l.includes('OVERSEES'));
-      const hasCanada = locations.some(l => l.includes('CANADA'));
-      
-      if (hasOverseas) {
+      // Determine source based on the closest records to the Mid Estimate to avoid labeling USA mid-prices as Overseas
+      const topLocation = (closestRecord?.vendor_location || 'USA').toUpperCase();
+      const isOSValue = topLocation.includes('CHINA') || topLocation.includes('OVERSEAS') || topLocation.includes('OVERSEES');
+      const isCanadaValue = topLocation.includes('CANADA');
+
+      if (isOSValue) {
         result.pricing_source = 'Overseas';
-      } else if (hasCanada) {
+      } else if (isCanadaValue) {
         result.pricing_source = 'Canada';
       } else {
         result.pricing_source = 'USA';
