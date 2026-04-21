@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import { jsonrepair } from "jsonrepair";
-import { EstimationResult, SignScope, ArtworkContext, PricingRecord, ExtractedDetails, DEFAULT_SHEET_ID } from "../types";
+import { EstimationResult, SignScope, ArtworkContext, PricingRecord, ExtractedDetails, DEFAULT_SHEET_ID, SignType } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
@@ -254,6 +254,22 @@ ${JSON.stringify(limitedDatabase, null, 2)}
 `;
 }
 
+// Helper to normalize extracted sign types to internal enums
+function normalizeSignType(type: string | undefined | null): SignType {
+  if (!type) return 'Other';
+  const t = type.toLowerCase();
+  if (t.includes('channel') || t.includes('letter')) return 'ChannelLetters';
+  if (t.includes('ada') || t.includes('braille') || t.includes('tactile')) return 'ADASign';
+  if (t.includes('lexan')) return 'LexanPanel';
+  if (t.includes('acm')) return 'ACMPanel';
+  if (t.includes('acrylic')) return 'AcrylicPanel';
+  if (t.includes('blade')) return 'BladeSign';
+  if (t.includes('pylon')) return 'PylonSign';
+  if (t.includes('monument')) return 'MonumentSign';
+  if (t.includes('cabinet') || t.includes('box')) return 'CabinetSign';
+  return 'Other';
+}
+
 export async function extractSignDetails(
   fileBase64: string,
   mimeType: string
@@ -341,7 +357,12 @@ export async function extractSignDetails(
     }
     
     try {
-      return JSON.parse(text) as ExtractedDetails;
+      const parsed = JSON.parse(text) as ExtractedDetails;
+      // Normalize sign_type immediately to ensure consistency
+      if (parsed.scope) {
+        parsed.scope.sign_type = normalizeSignType(parsed.scope.sign_type as string);
+      }
+      return parsed;
     } catch (e) {
       console.warn("Extraction JSON parse failed, attempting repair...");
       try {
@@ -366,7 +387,9 @@ export async function estimatePricing(
   hasProgramPricing: boolean = false
 ): Promise<EstimationResult> {
   // RAG Step: Scoring-based semantic retrieval
-  const targetType = (scope.sign_type || '').toLowerCase();
+  // Ensure the target sign_type is normalized before scoring
+  const normalizedTargetType = normalizeSignType(scope.sign_type as string);
+  const targetType = normalizedTargetType.toLowerCase();
   const targetDesc = (scope.description || additionalNotes || '').toLowerCase();
   const targetMounting = (scope.mounting || '').toLowerCase();
   const targetIllum = (scope.illumination || '').toLowerCase();
@@ -424,18 +447,28 @@ export async function estimatePricing(
     if (scope.dimensions && record.dimensions) {
       const targetH = scope.dimensions.height || 0;
       const targetW = scope.dimensions.width || 0;
+      const targetArea = (scope.dimensions as any).area_sqft || 0;
+      
       const recH = record.dimensions.height || 0;
       const recW = record.dimensions.width || 0;
+      
+      // Calculate area if not provided (approximate)
+      const recArea = (recH * recW) / 144;
       
       // Ignore 0x0 placeholder matches if they dominate the results
       if (targetH > 0 && targetW > 0 && recH > 0 && recW > 0) {
         const hDiff = Math.abs(targetH - recH);
         const wDiff = Math.abs(targetW - recW);
         
-        if (hDiff < 1 && wDiff < 1) score += 120; // High reward for exact size matches
-        else if (hDiff < 3 && wDiff < 3) score += 80; 
-        else if (hDiff < 6 && wDiff < 6) score += 50; 
-        else if (hDiff < 12 && wDiff < 12) score += 30;
+        if (hDiff < 1 && wDiff < 1) score += 120;
+        else if (hDiff < 3 && wDiff < 3) score += 80;
+        
+        // Area Match (very high precision for cabinets/pylons)
+        if (targetArea > 0 && recArea > 0) {
+          const areaDiff = Math.abs(targetArea - recArea);
+          if (areaDiff < 2) score += 150; // High reward for matching square footage
+          else if (areaDiff < 10) score += 70;
+        }
       } else if (targetH === 0 && targetW === 0 && recH === 0 && recW === 0) {
         // Low priority match for "data-less" records
         score += 10;
@@ -446,9 +479,13 @@ export async function estimatePricing(
   });
 
   // Filter and sort by score
+  // Added ID as secondary sort key to ensure 100% determinism on tied scores
   let scoredItems = scoredRecords
     .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(b.record.id).localeCompare(String(a.record.id));
+    });
 
   console.log("Top RAG Scores:", scoredItems.slice(0, 5).map(i => ({ 
     id: i.record.id, 
@@ -769,9 +806,10 @@ export async function estimatePricing(
         });
       }
 
-      // FALLBACK: If matched_records is empty but we have relevant records, populate with top 3
+      // FALLBACK: If matched_records is empty but we have relevant records, populate with top matches
       if ((!Array.isArray(result.matched_records) || result.matched_records.length === 0) && relevantRecords.length > 0) {
-        result.matched_records = relevantRecords.slice(0, 3).map(r => ({
+        // Increase from 3 to 10 to show more data context
+        result.matched_records = relevantRecords.slice(0, 10).map(r => ({
           record_id: r.id,
           po_number: r.po_number || '',
           why_match: `Highly relevant historical record for ${r.sign_type} based on semantic similarity.`,
@@ -810,12 +848,15 @@ export async function estimatePricing(
         
         if (costs.length > 0) {
           const mid = costs[Math.floor(costs.length / 2)];
-          console.log(`CORRECTION: Calculated median $${mid} from ${costs.length} matched records.`);
+          const min = costs[0];
+          const max = costs[costs.length - 1];
+          
+          console.log(`CORRECTION: Calculated median $${mid} (min: $${min}, max: $${max}) from ${costs.length} matched records.`);
           
           result.estimate.manufacture_cost = {
-            low: Math.round(mid * 0.9),
+            low: min < mid ? min : Math.round(mid * 0.9),
             mid: Math.round(mid),
-            high: Math.round(mid * 1.1)
+            high: max > mid ? max : Math.round(mid * 1.1)
           };
           
           // Force a summary update if it was saying $0 or missing a valid number
@@ -851,6 +892,27 @@ export async function estimatePricing(
           if (!result.confidence.rationale || result.confidence.rationale.toLowerCase().includes('no rationale')) {
             result.confidence.rationale = "Estimate calculated based on the median of the most relevant historical pricing records found in the database for similar sign types and dimensions.";
             result.confidence.score = Math.max(result.confidence.score || 0, 60);
+          }
+        }
+      }
+
+      // FINAL SYNC: Align low/high range with actual matched records to ensure UI consistency
+      if (result.matched_records && result.matched_records.length > 0 && result.estimate?.manufacture_cost) {
+        const availableCosts = result.matched_records
+          .map(r => r.cost?.amount)
+          .filter((c): c is number => typeof c === 'number' && c > 0)
+          .sort((a, b) => a - b);
+        
+        if (availableCosts.length > 0) {
+          const minCost = availableCosts[0];
+          const maxCost = availableCosts[availableCosts.length - 1];
+          
+          // Ensure the estimate range at least covers the range of records shown to the user
+          if (result.estimate.manufacture_cost.low > minCost) {
+            result.estimate.manufacture_cost.low = minCost;
+          }
+          if (result.estimate.manufacture_cost.high < maxCost) {
+            result.estimate.manufacture_cost.high = maxCost;
           }
         }
       }
