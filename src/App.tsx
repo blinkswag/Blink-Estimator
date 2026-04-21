@@ -559,39 +559,48 @@ export default function App() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {Array.isArray(result.estimate?.line_items) && result.estimate.line_items.map((item, i) => {
-                    let margin = 0;
-                    const isOS = result.pricing_source === 'Overseas';
-                    
-                    if (projectType === 'Government') {
-                      margin = isOS ? 0.5 : 0;
-                    } else {
-                      margin = isOS ? 0.5 : 0.3;
-                    }
+                  {result.selling_price && Array.isArray(result.selling_price.line_items) ? (
+                    result.selling_price.line_items.map((item, i) => {
+                      const manufactureItem = result.estimate?.line_items?.[i];
+                      const marginValue = manufactureItem && item.unit_price > 0 
+                        ? ((item.unit_price / manufactureItem.unit_cost) - 1) * 100
+                        : (result.pricing_source === 'Overseas' ? 50 : (projectType === 'Government' ? 0 : 30));
 
-                    const unitPrice = (item.unit_cost || 0) * (1 + margin);
-                    const extendedPrice = unitPrice * (item.qty || 0);
+                      return (
+                        <TableRow key={i} className="border-slate-800 hover:bg-slate-800/20">
+                          <TableCell className="text-xs font-medium text-slate-300 py-4">{item.name || 'Unknown Item'}</TableCell>
+                          <TableCell className="text-xs font-bold text-slate-100 py-4">{item.qty || 0}</TableCell>
+                          <TableCell className="text-xs font-bold text-slate-100 py-4">${item.unit_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell className="text-xs font-bold text-green-400 py-4">${item.extended_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell className="text-[10px] text-slate-500 py-4 font-bold">{Math.round(marginValue)}%</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  ) : (
+                    Array.isArray(result.estimate?.line_items) && result.estimate.line_items.map((item, i) => {
+                      let margin = 0;
+                      const isOS = result.pricing_source === 'Overseas';
+                      if (projectType === 'Government') margin = isOS ? 0.5 : 0;
+                      else margin = isOS ? 0.5 : 0.3;
 
-                    return (
-                      <TableRow key={i} className="border-slate-800 hover:bg-slate-800/20">
-                        <TableCell className="text-xs font-medium text-slate-300 py-4">{item.name || 'Unknown Item'}</TableCell>
-                        <TableCell className="text-xs font-bold text-slate-100 py-4">{item.qty || 0}</TableCell>
-                        <TableCell className="text-xs font-bold text-slate-100 py-4">${unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
-                        <TableCell className="text-xs font-bold text-green-400 py-4">${extendedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
-                        <TableCell className="text-[10px] text-slate-500 py-4 font-bold">{(margin * 100).toFixed(0)}%</TableCell>
-                      </TableRow>
-                    );
-                  })}
+                      const unitPrice = (item.unit_cost || 0) * (1 + margin);
+                      const extendedPrice = unitPrice * (item.qty || 0);
+
+                      return (
+                        <TableRow key={i} className="border-slate-800 hover:bg-slate-800/20">
+                          <TableCell className="text-xs font-medium text-slate-300 py-4">{item.name || 'Unknown Item'}</TableCell>
+                          <TableCell className="text-xs font-bold text-slate-100 py-4">{item.qty || 0}</TableCell>
+                          <TableCell className="text-xs font-bold text-slate-100 py-4">${unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell className="text-xs font-bold text-green-400 py-4">${extendedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell className="text-[10px] text-slate-500 py-4 font-bold">{(margin * 100).toFixed(0)}%</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
                   <TableRow className="bg-green-950/10 border-none">
                     <TableCell colSpan={3} className="text-right text-[10px] font-bold text-slate-400 uppercase py-6">Total Selling Price</TableCell>
                     <TableCell colSpan={2} className="text-xl font-black text-green-400 py-6">
-                      ${(Array.isArray(result.estimate?.line_items) ? result.estimate.line_items : []).reduce((acc, item) => {
-                        let margin = 0;
-                        const isOS = result.pricing_source === 'Overseas';
-                        if (projectType === 'Government') margin = isOS ? 0.5 : 0;
-                        else margin = isOS ? 0.5 : 0.3;
-                        return acc + ((item.extended_cost || 0) * (1 + margin));
-                      }, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      ${(result.selling_price?.mid || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </TableCell>
                   </TableRow>
                 </TableBody>

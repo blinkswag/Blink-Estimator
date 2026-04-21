@@ -170,6 +170,7 @@ NON-NEGOTIABLE RULES
 5) DO NOT HALLUCINATE FEATURES. If the input scope says "Illumination: None" or null, do not assume it has illumination. If it's an ADA sign, it is almost never illuminated unless explicitly stated.
 6) DO NOT GUESS DIMENSIONS. Use the dimensions provided in the scope.
 7) If the input scope is missing data, list it in "missing_inputs" and do not invent values for "normalized_inputs".
+8) **CRITICAL**: Never return $0 for manufacture cost if matching records exist in the PRICING KNOWLEDGE BASE. If you cannot find a "perfect" match, use the closest available data and explain your interpolation. Returning $0 when records are provided is a failure.
 
 YOU WILL RECEIVE ONE OR MORE OF THE FOLLOWING INPUTS:
 A) sign_scope (user provided): text + optional structured fields (sign type, dimensions, mounting, materials, illumination, depth, raceway/backer length/area, face treatment, number of letters, logo count, etc.)
@@ -328,8 +329,16 @@ export async function extractSignDetails(
     let text = response.text;
     if (!text) throw new Error("No response from extraction model");
     
-    // Clean up potential markdown blocks and whitespace
-    text = text.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+    // Clean up potential markdown blocks, thinking blocks, and whitespace
+    text = text.replace(/<thought>[\s\S]*?<\/thought>/g, ""); // Remove thinking blocks
+    text = text.replace(/```json\s?/g, "").replace(/```/g, "").trim();
+    
+    // Find absolute start/end of JSON to strip any surrounding chatter
+    const startIdx1 = text.indexOf('{');
+    const endIdx1 = text.lastIndexOf('}');
+    if (startIdx1 !== -1 && endIdx1 !== -1 && endIdx1 > startIdx1) {
+      text = text.substring(startIdx1, endIdx1 + 1);
+    }
     
     try {
       return JSON.parse(text) as ExtractedDetails;
@@ -339,7 +348,7 @@ export async function extractSignDetails(
         const repaired = jsonrepair(text);
         return JSON.parse(repaired) as ExtractedDetails;
       } catch (repairError) {
-        console.error("Failed to parse Gemini response. Length:", text.length, "Start:", text.substring(0, 100));
+        console.error("CRITICAL: Failed to parse extraction response. Raw text snippet:", text.substring(0, 500));
         throw e;
       }
     }
@@ -372,24 +381,42 @@ export async function estimatePricing(
     
     // 0. PO ID Match (Absolute Priority)
     // Check if the PO ID is mentioned anywhere in the target description or sign type
-    if (targetDesc.includes(recordId) || recordId.includes(targetDesc) || targetType.includes(recordId)) {
+    if (targetDesc.includes(recordId) || recordId.includes(targetDesc) || (targetType && targetType.includes(recordId))) {
       score += 2000; // Massive boost for exact ID match
     }
 
     // 1. Sign Type Match (Highest Weight)
-    if (recordType === targetType) score += 100;
-    else if (recordType.includes(targetType) || targetType.includes(recordType)) score += 60;
+    // Exact match is king
+    if (recordType === targetType) {
+      score += 500; // Increased to dominate keyword noise
+    }
+    // Substring match
+    else if (recordType.includes(targetType) || targetType.includes(recordType)) {
+      score += 250; 
+    } else {
+      // PENALTY: Significant penalty if sign types are completely different (no common substring)
+      // This prevents "Blade Sign" from matching "Pylon Sign" just via generic keywords
+      score -= 200;
+    }
     
     // 2. Mounting & Illumination Match (High Weight)
-    if (targetMounting && (recordMounting.includes(targetMounting) || targetMounting.includes(recordMounting))) score += 45;
-    if (targetIllum && (recordIllum.includes(targetIllum) || targetIllum.includes(recordIllum))) score += 45;
+    // Only match if they aren't 'n/a' or empty
+    if (targetMounting && targetMounting !== 'n/a' && (recordMounting.includes(targetMounting) || targetMounting.includes(recordMounting))) score += 45;
+    if (targetIllum && targetIllum !== 'n/a' && (recordIllum.includes(targetIllum) || targetIllum.includes(recordIllum))) score += 45;
     
-    // 3. Description Keyword Match (High Weight)
+    // 3. Description Keyword Match (Filtered)
     if (targetDesc || targetType) {
-      const targetKeywords = `${targetDesc} ${targetType}`.split(/[\s,.-]+/).filter(k => k.length > 2);
+      // Split composite words and filter out common generic terms
+      const stopWords = new Set(['sign', 'signs', 'type', 'mounting', 'fabrication', 'manufacture', 'included', 'item', 'details', 'notes', 'other']);
+      const targetKeywords = `${targetDesc} ${targetType}`
+        .split(/[\s,.-]+|(?=[A-Z])/) // Split by space, punctuation, or camelCase
+        .map(k => k.toLowerCase())
+        .filter(k => k.length > 2 && !stopWords.has(k));
+      
       targetKeywords.forEach(k => {
-        if (recordDesc.includes(k)) score += 30;
-        if (recordType.includes(k)) score += 30;
+        // High reward for matching specific fabrication keywords
+        if (recordDesc.includes(k)) score += 40; 
+        if (recordType.includes(k)) score += 50; 
       });
     }
     
@@ -397,13 +424,22 @@ export async function estimatePricing(
     if (scope.dimensions && record.dimensions) {
       const targetH = scope.dimensions.height || 0;
       const targetW = scope.dimensions.width || 0;
-      const hDiff = Math.abs(targetH - record.dimensions.height);
-      const wDiff = Math.abs(targetW - record.dimensions.width);
+      const recH = record.dimensions.height || 0;
+      const recW = record.dimensions.width || 0;
       
-      if (hDiff < 1 && wDiff < 1) score += 100; // Exact or near-exact dimensions
-      else if (hDiff < 3 && wDiff < 3) score += 60; 
-      else if (hDiff < 6 && wDiff < 6) score += 40; 
-      else if (hDiff < 12 && wDiff < 12) score += 20;
+      // Ignore 0x0 placeholder matches if they dominate the results
+      if (targetH > 0 && targetW > 0 && recH > 0 && recW > 0) {
+        const hDiff = Math.abs(targetH - recH);
+        const wDiff = Math.abs(targetW - recW);
+        
+        if (hDiff < 1 && wDiff < 1) score += 120; // High reward for exact size matches
+        else if (hDiff < 3 && wDiff < 3) score += 80; 
+        else if (hDiff < 6 && wDiff < 6) score += 50; 
+        else if (hDiff < 12 && wDiff < 12) score += 30;
+      } else if (targetH === 0 && targetW === 0 && recH === 0 && recW === 0) {
+        // Low priority match for "data-less" records
+        score += 10;
+      }
     }
     
     return { record, score };
@@ -425,13 +461,13 @@ export async function estimatePricing(
 
   // If no matches, fallback to a general sample
   if (relevantRecords.length === 0) {
-    relevantRecords = currentPricingDatabase.slice(0, 100);
-  } else if (relevantRecords.length > 100) {
+    relevantRecords = currentPricingDatabase.slice(0, 25);
+  } else if (relevantRecords.length > 25) {
     // Limit context size for better focus
-    relevantRecords = relevantRecords.slice(0, 100);
+    relevantRecords = relevantRecords.slice(0, 25);
   }
 
-  console.log(`RAG: Retrieved ${relevantRecords.length} relevant pricing vectors for ${scope.sign_type}`);
+  console.log(`RAG: Retrieved ${relevantRecords.length} relevant pricing records for type: "${scope.sign_type}" (Top Score: ${scoredItems[0]?.score || 0})`);
 
   const prompt = `
     Estimate the cost for the following sign scope:
@@ -445,6 +481,7 @@ export async function estimatePricing(
     3. If a parameter is missing from the Scope, list it in "missing_inputs" and do not guess its value in "normalized_inputs".
     4. Use the provided Scope as the absolute source of truth for the sign's physical characteristics.
     5. You MUST include the most relevant records from the PRICING KNOWLEDGE BASE in the "matched_records" field. These records are the foundation of your estimate. Do not leave this array empty if records were provided in the system instruction.
+    6. **IMPORTANT**: If manufacture is included, the "manufacture_cost" MUST NOT be $0. Reference the provided historical records to determine a realistic cost based on sign type, dimensions, and materials.
 
     Provide the response in the following JSON format:
     {
@@ -633,8 +670,54 @@ export async function estimatePricing(
       throw new Error("No response from Gemini");
     }
     
-    // Clean up potential markdown blocks and whitespace
-    text = text.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+    // Clean up potential markdown blocks, thinking blocks, and whitespace
+    text = text.replace(/<thought>[\s\S]*?<\/thought>/g, ""); // Remove thinking blocks
+    text = text.replace(/```json\s?/g, "").replace(/```/g, "").trim();
+    
+    // Replace non-standard JSON values that Gemini sometimes outputs
+    text = text.replace(/:\s?NaN/g, ": null")
+               .replace(/:\s?Infinity/g, ": 999999")
+               .replace(/:\s?undefined/g, ": null"); // Also handle undefined
+    
+    // Find absolute start/end of JSON to strip any surrounding chatter
+    // If there are multiple objects, we try to take the one that seems most complete (estimate field)
+    const jsonObjects: string[] = [];
+    let searchIdx = 0;
+    while (true) {
+      const start = text.indexOf('{', searchIdx);
+      if (start === -1) break;
+      
+      // Basic brace counting to find end of object
+      let braceCount = 0;
+      let end = -1;
+      for (let i = start; i < text.length; i++) {
+        if (text[i] === '{') braceCount++;
+        else if (text[i] === '}') braceCount--;
+        
+        if (braceCount === 0) {
+          end = i;
+          break;
+        }
+      }
+      
+      if (end !== -1) {
+        jsonObjects.push(text.substring(start, end + 1));
+        searchIdx = end + 1;
+      } else {
+        break;
+      }
+    }
+    
+    if (jsonObjects.length > 0) {
+      // Pick the object that contains "estimate" or is just the longest
+      const bestObject = jsonObjects.sort((a, b) => {
+        const aHasEst = a.includes('"estimate"') ? 1 : 0;
+        const bHasEst = b.includes('"estimate"') ? 1 : 0;
+        if (aHasEst !== bHasEst) return bHasEst - aHasEst;
+        return b.length - a.length;
+      })[0];
+      text = bestObject;
+    }
 
     try {
       let result: EstimationResult;
@@ -642,46 +725,48 @@ export async function estimatePricing(
         result = JSON.parse(text) as EstimationResult;
       } catch (e) {
         console.warn("Standard JSON parse failed, attempting repair with jsonrepair...");
-        const repaired = jsonrepair(text);
-        result = JSON.parse(repaired) as EstimationResult;
+        try {
+          const repaired = jsonrepair(text);
+          result = JSON.parse(repaired) as EstimationResult;
+        } catch (repairError) {
+          console.error("CRITICAL: Failed to parse estimation response. Raw text snippet:", text.substring(0, 500));
+          throw e;
+        }
       }
 
-      // CORRECTION LAYER: If AI returns 0 but has matches, force a median calculation
-      if (result.estimate && (result.estimate.manufacture_cost?.mid === 0 || !result.estimate.manufacture_cost) && Array.isArray(result.matched_records) && result.matched_records.length > 0) {
-        const costs = result.matched_records
-          .map(r => r.cost?.amount)
-          .filter((c): c is number => typeof c === 'number' && c > 0)
-          .sort((a, b) => a - b);
-        
-        if (costs.length > 0) {
-          const mid = costs[Math.floor(costs.length / 2)];
-          result.estimate.manufacture_cost = {
-            low: Math.round(mid * 0.9),
-            mid: Math.round(mid),
-            high: Math.round(mid * 1.1)
+      // NORMALIZE: Ensure the structure has all required fields to prevent "undefined" property access
+      if (!result.estimate) result.estimate = { currency: 'USD', manufacture_cost: { low: 0, mid: 0, high: 0 }, line_items: [] };
+      if (!result.estimate.manufacture_cost) result.estimate.manufacture_cost = { low: 0, mid: 0, high: 0 };
+      if (!result.estimate.line_items) result.estimate.line_items = [];
+      if (!result.confidence) result.confidence = { score: 0, rationale: "" };
+      if (!result.matched_records) result.matched_records = [];
+      if (!result.flags) result.flags = [];
+      if (!result.missing_inputs) result.missing_inputs = [];
+      if (!result.assumptions) result.assumptions = [];
+
+      // Ensure all matched_records have accurate cost and po_number data from the local database
+      if (Array.isArray(result.matched_records)) {
+        result.matched_records = result.matched_records.map(r => {
+          // Fuzzier matching: check ID, PO Number, and sign type + dimensions fingerprint
+          const full = currentPricingDatabase.find(f => {
+            const fId = String(f.id).toLowerCase();
+            const rId = String(r.record_id || '').toLowerCase();
+            const fPO = String(f.po_number || '').toLowerCase();
+            const rPO = String(r.po_number || '').toLowerCase();
+            
+            return fId === rId || (fPO && fPO === rId) || (fPO === rPO && fPO !== '');
+          });
+          
+          return {
+            ...r,
+            po_number: full?.po_number || r.po_number || '',
+            vendor_location: full?.vendor_location || r.vendor_location,
+            cost: {
+              amount: full?.manufacture_cost || r.cost?.amount || 0,
+              currency: r.cost?.currency || 'USD'
+            }
           };
-          
-          // Also fix line items if empty or zeroed
-          const hasValidLineItems = Array.isArray(result.estimate.line_items) && 
-                                   result.estimate.line_items.length > 0 && 
-                                   result.estimate.line_items.some(i => (i.extended_cost || 0) > 0);
-          
-          if (!hasValidLineItems) {
-            result.estimate.line_items = [{
-              name: `Base ${result.sign_type || 'Sign'} Manufacture`,
-              qty: result.normalized_inputs?.qty_sets || 1,
-              unit_cost: mid,
-              extended_cost: mid * (result.normalized_inputs?.qty_sets || 1),
-              basis: 'Derived from matched historical records (Median)'
-            }];
-          }
-          
-          result.pricing_method = 'direct_match_median';
-          result.summary += " (Note: Estimate corrected using median of matched records as AI returned zero cost)";
-          if (Array.isArray(result.flags)) {
-            result.flags.push('NEEDS_ARTWORK_CONFIRMATION');
-          }
-        }
+        });
       }
 
       // FALLBACK: If matched_records is empty but we have relevant records, populate with top 3
@@ -701,7 +786,106 @@ export async function estimatePricing(
             currency: 'USD'
           }
         }));
-        result.summary += " (Note: Matched records populated from historical database search)";
+        result.summary = (result.summary || "") + " (Note: Matched records populated from historical database search)";
+      }
+
+      // CORRECTION LAYER: If AI returns 0 or missing costs, force a calculation from matched records
+      let midCostValue = result.estimate?.manufacture_cost?.mid;
+      const isZeroOrMissing = midCostValue === 0 || midCostValue === undefined || midCostValue === null || isNaN(midCostValue as number);
+      
+      // Modified check: run even if estimate object is missing entirely
+      if ((!result.estimate || isZeroOrMissing) && Array.isArray(result.matched_records) && result.matched_records.length > 0) {
+        if (!result.estimate) {
+          result.estimate = {
+            currency: 'USD',
+            manufacture_cost: { low: 0, mid: 0, high: 0 },
+            line_items: []
+          };
+        }
+        
+        const costs = result.matched_records
+          .map(r => r.cost?.amount)
+          .filter((c): c is number => typeof c === 'number' && c > 0)
+          .sort((a, b) => a - b);
+        
+        if (costs.length > 0) {
+          const mid = costs[Math.floor(costs.length / 2)];
+          console.log(`CORRECTION: Calculated median $${mid} from ${costs.length} matched records.`);
+          
+          result.estimate.manufacture_cost = {
+            low: Math.round(mid * 0.9),
+            mid: Math.round(mid),
+            high: Math.round(mid * 1.1)
+          };
+          
+          // Force a summary update if it was saying $0 or missing a valid number
+          if (result.summary?.includes('$0') || result.summary?.includes('most likely $0')) {
+             result.summary = `Historical median estimate: $${mid.toLocaleString()}. Calculated from ${costs.length} relevant historical records.`;
+          }
+          
+          // Also fix line items if empty or zeroed
+          const hasValidLineItems = Array.isArray(result.estimate.line_items) && 
+                                   result.estimate.line_items.length > 0 && 
+                                   result.estimate.line_items.some(i => (i.extended_cost || 0) > 0);
+          
+          if (!hasValidLineItems) {
+            result.estimate.line_items = [{
+              name: `Base ${result.sign_type || 'Sign'} Manufacture`,
+              qty: (result.normalized_inputs?.qty_sets || 1) || 1,
+              unit_cost: mid,
+              extended_cost: mid * ((result.normalized_inputs?.qty_sets || 1) || 1),
+              basis: 'Derived from matched historical records (Median fallback)'
+            }];
+          }
+          
+          result.pricing_method = 'direct_match_median';
+          result.summary = (result.summary || "") + " (Note: Cost corrected via historical median as AI returned zero or invalid cost)";
+          if (Array.isArray(result.flags)) {
+            if (!result.flags.includes('LOW_DATA')) result.flags.push('LOW_DATA');
+          }
+          
+          if (!result.confidence) {
+            result.confidence = { score: 0, rationale: "" };
+          }
+          
+          if (!result.confidence.rationale || result.confidence.rationale.toLowerCase().includes('no rationale')) {
+            result.confidence.rationale = "Estimate calculated based on the median of the most relevant historical pricing records found in the database for similar sign types and dimensions.";
+            result.confidence.score = Math.max(result.confidence.score || 0, 60);
+          }
+        }
+      }
+
+      // Fix math inconsistencies from AI response
+      if (result.estimate && Array.isArray(result.estimate.line_items)) {
+        let totalExtended = 0;
+        result.estimate.line_items = result.estimate.line_items.map(item => {
+          const qty = item.qty || 1;
+          const unit = item.unit_cost || 0;
+          const extended = Math.round(unit * qty);
+          totalExtended += extended;
+          return {
+            ...item,
+            qty,
+            unit_cost: unit,
+            extended_cost: extended
+          };
+        });
+
+        // Ensure the summary mid estimate matches the line items sum to avoid UI confusion
+        if (result.estimate.manufacture_cost) {
+          // Only overwrite mid with line item sum if the sum is greater than 0
+          // This prevents $0 values if line items happen to be empty/invalid
+          if (totalExtended > 0) {
+            result.estimate.manufacture_cost.mid = totalExtended;
+            // Re-adjust low/high if they were zeroed or inconsistent
+            if (result.estimate.manufacture_cost.low === 0 || result.estimate.manufacture_cost.low > totalExtended) {
+              result.estimate.manufacture_cost.low = Math.round(totalExtended * 0.9);
+            }
+            if (result.estimate.manufacture_cost.high === 0 || result.estimate.manufacture_cost.high < totalExtended) {
+              result.estimate.manufacture_cost.high = Math.round(totalExtended * 1.1);
+            }
+          }
+        }
       }
 
       // Determine pricing source from matched records, prioritizing the records closest to the Mid Estimate cost
@@ -767,14 +951,27 @@ export async function estimatePricing(
           margin = isOS ? 0.5 : 0.3;
         }
 
+        const totalManufactureMid = result.estimate.manufacture_cost.mid || 0;
+        
+        // Final margin double-check for safety
+        if (projectType === 'Government') {
+          margin = isOS ? 0.5 : 0;
+        } else {
+          margin = isOS ? 0.5 : 0.3;
+        }
+
         result.selling_price = {
-          mid: Math.round((result.estimate.manufacture_cost.mid || 0) * (1 + margin)),
-          line_items: (Array.isArray(result.estimate.line_items) ? result.estimate.line_items : []).map(item => ({
-            name: item.name || 'Unknown Item',
-            qty: item.qty || 0,
-            unit_price: Math.round((item.unit_cost || 0) * (1 + margin) * 100) / 100,
-            extended_price: Math.round((item.extended_cost || 0) * (1 + margin) * 100) / 100
-          }))
+          mid: Math.round(totalManufactureMid * (1 + margin)),
+          line_items: (Array.isArray(result.estimate.line_items) ? result.estimate.line_items : []).map(item => {
+            const unitPrice = Math.round((item.unit_cost || 0) * (1 + margin) * 100) / 100;
+            const qty = item.qty || 0;
+            return {
+              name: item.name || 'Unknown Item',
+              qty: qty,
+              unit_price: unitPrice,
+              extended_price: Math.round(unitPrice * qty * 100) / 100
+            };
+          })
         };
       }
 
