@@ -359,7 +359,11 @@ export async function estimatePricing(
   const targetDesc = (scope.description || additionalNotes || '').toLowerCase();
   const targetMounting = (scope.mounting || '').toLowerCase();
   const targetIllum = (scope.illumination || '').toLowerCase();
-
+  
+  // Materials keywords for prioritized matching
+  const targetMaterialsJson = scope.materials ? JSON.stringify(scope.materials).toLowerCase() : '';
+  const targetMaterialsKeywords = (targetDesc + " " + targetMaterialsJson).toLowerCase();
+  
   // Extract potential SKUs/IDs from the target description (e.g., #SIGN021-WS, PO-34487)
   const skuRegex = /(?:sku|id|po|#)\s*[:#-]?\s*([a-z0-9_-]+)/gi;
   const matches = [...targetDesc.matchAll(skuRegex)];
@@ -379,6 +383,7 @@ export async function estimatePricing(
     const recordDesc = (record.description || '').toLowerCase();
     const recordMounting = (record.mounting || '').toLowerCase();
     const recordIllum = (record.illumination || '').toLowerCase();
+    const recordMaterials = (record.materials || '').toLowerCase();
     
     // 0. PO ID / SKU Match (Absolute Priority)
     const isIdMatch = recordId === targetSku ||
@@ -409,21 +414,32 @@ export async function estimatePricing(
     // 1. Sign Type Match (Highest Weight)
     // Exact match is king
     if (recordType === targetType) {
-      score += 500; // Increased to dominate keyword noise
+      score += 700; // Increased to prioritize core type
     }
     // Substring match
     else if (recordType.includes(targetType) || targetType.includes(recordType)) {
-      score += 250; 
+      score += 350; 
     } else {
       // PENALTY: Significant penalty if sign types are completely different (no common substring)
       // This prevents "Blade Sign" from matching "Pylon Sign" just via generic keywords
-      score -= 200;
+      score -= 300;
     }
     
-    // 2. Mounting & Illumination Match (High Weight)
+    // 2. Mounting & Illumination Match (Low Weight - "Not construction method")
     // Only match if they aren't 'n/a' or empty
-    if (targetMounting && targetMounting !== 'n/a' && (recordMounting.includes(targetMounting) || targetMounting.includes(recordMounting))) score += 45;
+    if (targetMounting && targetMounting !== 'n/a' && (recordMounting.includes(targetMounting) || targetMounting.includes(recordMounting))) score += 20;
     if (targetIllum && targetIllum !== 'n/a' && (recordIllum.includes(targetIllum) || targetIllum.includes(recordIllum))) score += 45;
+
+    // 2.5 Material Match (High Weight - New Priority)
+    if (targetMaterialsKeywords && recordMaterials) {
+       const stopWords = new Set(['sign', 'signs', 'with', 'and', 'the', 'item', 'details']);
+       const matKeywords = targetMaterialsKeywords.split(/[\s,.-]+/)
+          .filter(k => k.length > 3 && !stopWords.has(k));
+       
+       matKeywords.forEach(mw => {
+          if (recordMaterials.includes(mw)) score += 50;
+       });
+    }
     
     // 3. Description Keyword Match (Filtered)
     if (targetDesc || targetType) {
@@ -460,14 +476,14 @@ export async function estimatePricing(
         const hDiffRev = Math.abs(targetH - recW);
         const wDiffRev = Math.abs(targetW - recH);
         
-        if ((hDiff < 1 && wDiff < 1) || (hDiffRev < 1 && wDiffRev < 1)) score += 120;
-        else if ((hDiff < 3 && wDiff < 3) || (hDiffRev < 3 && wDiffRev < 3)) score += 80;
+        if ((hDiff < 1 && wDiff < 1) || (hDiffRev < 1 && wDiffRev < 1)) score += 200;
+        else if ((hDiff < 3 && wDiff < 3) || (hDiffRev < 3 && wDiffRev < 3)) score += 120;
         
         // Area Match (very high precision for cabinets/pylons)
         if (targetArea > 0 && recArea > 0) {
           const areaDiff = Math.abs(targetArea - recArea);
-          if (areaDiff < 2) score += 150; // High reward for matching square footage
-          else if (areaDiff < 10) score += 70;
+          if (areaDiff < 2) score += 250; // High reward for matching square footage
+          else if (areaDiff < 10) score += 100;
         }
       } else if (targetH === 0 && targetW === 0 && recH === 0 && recW === 0) {
         // Low priority match for "data-less" records
