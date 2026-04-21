@@ -399,9 +399,24 @@ export default function App() {
                       <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Low Range</p>
                       <p className="text-xl font-black text-slate-200">${result.estimate?.manufacture_cost?.low?.toLocaleString() || '0'}</p>
                     </div>
-                    <div className="bg-blue-600/10 p-4 rounded-lg border border-blue-500/30 shadow-[0_0_15px_rgba(37,99,235,0.1)]">
-                      <p className="text-[10px] font-bold text-blue-400 uppercase mb-1">Mid Estimate</p>
-                      <p className="text-xl font-black text-blue-400">${result.estimate?.manufacture_cost?.mid?.toLocaleString() || '0'}</p>
+                    <div className={cn(
+                      "p-4 rounded-lg border",
+                      result.is_exact_match 
+                        ? "bg-green-600/10 border-green-500/30 shadow-[0_0_15px_rgba(34,197,94,0.1)]" 
+                        : "bg-blue-600/10 border-blue-500/30 shadow-[0_0_15px_rgba(37,99,235,0.1)]"
+                    )}>
+                      <p className={cn(
+                        "text-[10px] font-bold uppercase mb-1",
+                        result.is_exact_match ? "text-green-400" : "text-blue-400"
+                      )}>
+                        {result.is_exact_match ? "Exact Match" : "Mid Estimate"}
+                      </p>
+                      <p className={cn(
+                        "text-xl font-black",
+                        result.is_exact_match ? "text-green-400" : "text-blue-400"
+                      )}>
+                        ${result.estimate?.manufacture_cost?.mid?.toLocaleString() || '0'}
+                      </p>
                     </div>
                     <div className="bg-slate-950/50 p-4 rounded-lg border border-slate-800">
                       <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">High Range</p>
@@ -484,7 +499,7 @@ export default function App() {
                   <div className="space-y-2">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Notes</p>
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      • Summary: {result.sign_type} — estimated manufacture cost ${result.estimate?.manufacture_cost?.low?.toLocaleString() || '0'}-${result.estimate?.manufacture_cost?.high?.toLocaleString() || '0'} (most likely ${result.estimate?.manufacture_cost?.mid?.toLocaleString() || '0'}). {result.estimate_scope?.notes?.join(' ') || ''}
+                      • Summary: {result.sign_type} — {result.is_exact_match ? 'exact match value' : 'estimated manufacture cost'} ${result.estimate?.manufacture_cost?.low?.toLocaleString() || '0'}-${result.estimate?.manufacture_cost?.high?.toLocaleString() || '0'} ({result.is_exact_match ? 'exact' : 'most likely'} ${result.estimate?.manufacture_cost?.mid?.toLocaleString() || '0'}). {result.estimate_scope?.notes?.join(' ') || ''}
                     </p>
                   </div>
                 </CardContent>

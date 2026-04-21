@@ -25,6 +25,7 @@ export interface SignScope {
   face_material?: string;
   qty_sets?: number;
   copy?: string;
+  sku?: string;
   finishes?: string;
   adders?: {
     remote_psu?: boolean;
@@ -58,9 +59,7 @@ export interface EstimationResult {
     notes: string[];
   };
   normalized_inputs: {
-    sign_type: string | null;
     copy: string | null;
-    letter_count: number | null;
     qty_sets: number;
     dimensions: {
       width_ft: number | null;
@@ -125,8 +124,9 @@ export interface EstimationResult {
     score: number;
     rationale: string;
   };
-  summary: string;
+  // Internal helper fields (not in AI schema but used for UI)
   pricing_source?: string;
+  is_exact_match?: boolean;
   overseas_estimate?: {
     mid: number;
     savings: number;
@@ -140,6 +140,7 @@ export interface EstimationResult {
       extended_price: number;
     }>;
   };
+  summary?: string;
 }
 
 export interface PricingRecord {
